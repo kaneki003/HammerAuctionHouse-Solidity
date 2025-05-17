@@ -5,7 +5,7 @@ import "./abstract/Auction.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-contract AllPayAuction is Auction{
+contract EnglishAuction is Auction{
 
     uint256 public auctionCounter=0;
     mapping (uint256 => AuctionData) public auctions;
@@ -45,7 +45,6 @@ contract AllPayAuction is Auction{
         uint256 deadline,
         uint256 deadlineExtension
     );
-
 
     modifier validAuctionId(uint256 auctionId) {
         require(auctionId>=0 && auctionId < auctionCounter,"Invalid auctionId");
@@ -123,15 +122,16 @@ contract AllPayAuction is Auction{
         require(auction.highestBid!=0 || bidAmount>auction.startingBid,"First bid should be greater than starting bid");
         require(auction.highestBid==0 || bidAmount>=auction.highestBid+auction.minBidDelta,"Bid amount should exceed current bid by atleast minBidDelta");
         
+        
         IERC20(auction.biddingToken).transferFrom(msg.sender,address(this),bidAmount);
+        IERC20(auction.biddingToken).transferFrom(address(this),auction.winner,auction.highestBid);
         auction.highestBid=bidAmount;
         auction.winner=msg.sender;
-        auction.availableFunds+=bidAmount;
+        auction.availableFunds=bidAmount;
         auction.deadline+=auction.deadlineExtension;
 
         emit bidPlaced(auctionId,msg.sender,bidAmount);
     }
-
 
     function withdrawFunds(uint256 auctionId) external validAuctionId(auctionId){
         AuctionData storage auction = auctions[auctionId]; 
@@ -168,5 +168,4 @@ contract AllPayAuction is Auction{
             auction.auctionedTokenIdOrAmount
         );
     }
-
 }
