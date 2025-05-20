@@ -6,10 +6,13 @@ import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-contract EnglishAuction is Auction{
+contract VickreyAuction is Auction{
 
     uint256 public auctionCounter=0;
     mapping (uint256 => AuctionData) public auctions;
+    mapping (uint256 => mapping(address => bytes32)) public commitments;
+    mapping (uint256 => mapping(address => uint256)) public bidAmounts;
+    
 
     struct AuctionData{
         uint256 id;
@@ -21,13 +24,12 @@ contract EnglishAuction is Auction{
         address auctionedToken;
         uint256 auctionedTokenIdOrAmount;
         address biddingToken;
-        uint256 startingBid;
         uint256 availableFunds;
-        uint256 minBidDelta;
-        uint256 highestBid;
+        uint256 winningBid;
         address winner;
-        uint256 deadline;
-        uint256 deadlineExtension;
+        uint256 startTime;
+        uint256 bidCommitEnd;
+        uint256 bidRevealEnd;
         bool isClaimed;
     }
 
@@ -41,10 +43,8 @@ contract EnglishAuction is Auction{
         address auctionedToken,
         uint256 auctionedTokenIdOrAmount,
         address biddingToken,
-        uint256 startingBid,
-        uint256 minBidDelta,
-        uint256 deadline,
-        uint256 deadlineExtension
+        uint256 bidCommitEnd,
+        uint256 bidRevealEnd
     );
 
     modifier validAuctionId(uint256 auctionId) {
@@ -60,15 +60,12 @@ contract EnglishAuction is Auction{
         address auctionedToken,
         uint256 auctionedTokenIdOrAmount,
         address biddingToken,
-        uint256 startingBid,
-        uint256 minBidDelta,
-        uint256 duration,
-        uint256 deadlineExtension
+        uint256 bidCommitDuration,
+        uint256 bidRevealDuration
     ) external{
         require(bytes(name).length>0,"Name must be present");
-        require(minBidDelta>=0,"Minimum bid delta cannot be negative");
-        require(startingBid>=0,"Starting bid cannot be negative");
-        require(duration>0,"Duration must be greater than zero seconds");
+        require(bidRevealDuration>86400,"Bid reveal duration must be greater than one day"); //setting minimum bid reveal threshold to 1 day
+        require(bidCommitDuration>0,"Bid commit duration must be greater than zero seconds");
 
         if(auctionType == AuctionType.NFT){
             require(IERC721(auctionedToken).ownerOf(auctionedTokenIdOrAmount)==msg.sender,"Caller must be the owner");
@@ -77,8 +74,8 @@ contract EnglishAuction is Auction{
             require(IERC20(auctionedToken).balanceOf(msg.sender)>=auctionedTokenIdOrAmount,"Insufficient balance");
             SafeERC20.safeTransferFrom(IERC20(auctionedToken),msg.sender,address(this),auctionedTokenIdOrAmount);
         }
-
-        uint256 deadline=block.timestamp+duration;
+        uint256 bidCommitEnd=bidCommitDuration+block.timestamp;
+        uint256 bidRevealEnd=bidRevealDuration+block.timestamp;
 
         auctions[auctionCounter] = AuctionData({
             id: auctionCounter,
@@ -90,13 +87,12 @@ contract EnglishAuction is Auction{
             auctionedToken: auctionedToken,
             auctionedTokenIdOrAmount: auctionedTokenIdOrAmount,
             biddingToken: biddingToken,
-            startingBid: startingBid,
             availableFunds: 0,
-            minBidDelta: minBidDelta,
-            highestBid: 0,
+            winningBid: 0,
             winner: msg.sender,
-            deadline: deadline,
-            deadlineExtension: deadlineExtension,
+            startTime: block.timestamp,
+            bidCommitEnd: bidCommitEnd,
+            bidRevealEnd: bidRevealEnd,
             isClaimed: false
         });
 
@@ -110,33 +106,51 @@ contract EnglishAuction is Auction{
             auctionedToken,
             auctionedTokenIdOrAmount,
             biddingToken,
-            startingBid,
-            minBidDelta,
-            deadline,
-            deadlineExtension
+            bidCommitEnd,
+            bidRevealEnd
         );
     }
 
-    function placeBid(uint256 auctionId,uint256 bidAmount) external validAuctionId(auctionId){
-        AuctionData storage auction = auctions[auctionId];
-        require(block.timestamp<auction.deadline,"Auction has ended");
-        require(auction.highestBid!=0 || bidAmount>auction.startingBid,"First bid should be greater than starting bid");
-        require(auction.highestBid==0 || bidAmount>=auction.highestBid+auction.minBidDelta,"Bid amount should exceed current bid by atleast minBidDelta");
-        
-        
-        SafeERC20.safeTransferFrom(IERC20(auction.biddingToken),msg.sender,address(this),bidAmount);
-        SafeERC20.safeTransfer(IERC20(auction.biddingToken), auction.winner,auction.highestBid);
-        auction.highestBid=bidAmount;
-        auction.winner=msg.sender;
-        auction.availableFunds=bidAmount;
-        auction.deadline+=auction.deadlineExtension;
-
-        emit bidPlaced(auctionId,msg.sender,bidAmount);
+    function commitBid(uint256 auctionId,bytes32 commitment) validAuctionId(auctionId) external payable {
+        AuctionData storage auction = auctions[auctionId]; 
+        require(block.timestamp<auction.bidCommitEnd,"The commiting phase has ended!");
+        require(commitments[auctionId][msg.sender]==bytes32(0),"The sender has already commited");
+        require(msg.value > 1000000000000000, "Minimum fees not fulfilled");  //minimum fees of 0.001 ether
+        commitments[auctionId][msg.sender]=commitment; 
     }
+
+    function revealBid(uint256 auctionId,uint256 bidAmount,bytes32 salt) validAuctionId(auctionId) external {
+        AuctionData storage auction = auctions[auctionId]; 
+        require(block.timestamp<auction.bidRevealEnd,"The revealing phase has ended!");
+        require(commitments[auctionId][msg.sender]!=bytes32(0),"The sender hadn't commited during commiting phase");
+
+        bytes32 check =keccak256(abi.encodePacked(bidAmount,salt));
+        require(check==commitments[auctionId][msg.sender],"Invalid reveal");
+        SafeERC20.safeTransferFrom(IERC20(auction.biddingToken),msg.sender,address(this), bidAmount);
+        bidAmounts[auctionId][msg.sender]=bidAmount;
+        uint256 highestBid=bidAmounts[auctionId][auction.winner];
+
+        if (highestBid < bidAmount){
+            if(highestBid > 0){
+                SafeERC20.safeTransfer(IERC20(auction.biddingToken), auction.winner, highestBid); //Highest bidder is outbid, refund the previous highest bid
+            }
+            auction.availableFunds=highestBid;
+            auction.winningBid=highestBid;
+            highestBid=bidAmount;
+            auction.winner=msg.sender;
+        }else{
+            SafeERC20.safeTransfer(IERC20(auction.biddingToken), msg.sender, bidAmount); //Not the highest bidder, refund the bid amount
+        }
+
+        (bool success, ) = msg.sender.call{value: 1000000000000000}(""); //Refund of fees
+        require(success, "Transfer failed");
+    }
+
 
     function withdrawFunds(uint256 auctionId) external validAuctionId(auctionId){
         AuctionData storage auction = auctions[auctionId]; 
         require(msg.sender==auctions[auctionId].auctioneer,"Not auctioneer!");
+        require(block.timestamp > auction.bidRevealEnd,"Reveal period hasn't ended yet");
         uint256 withdrawAmount=auction.availableFunds;
         require(withdrawAmount > 0,"No funds available");
 
@@ -152,9 +166,10 @@ contract EnglishAuction is Auction{
     function withdrawItem(uint256 auctionId) external validAuctionId(auctionId){
         AuctionData storage auction = auctions[auctionId];
         require(msg.sender==auction.winner,"Not auction winner");
-        require(block.timestamp>auction.deadline,"Auction has not ended yet");
+        require(block.timestamp>auction.bidRevealEnd,"Reveal period has not ended yet");
         require(!auction.isClaimed,"Auction had been settled");
 
+        SafeERC20.safeTransfer(IERC20(auction.biddingToken), auction.winner, bidAmounts[auctionId][msg.sender]-auction.winningBid);
         if(auction.auctionType==AuctionType.NFT){
             IERC721(auction.auctionedToken).safeTransferFrom(address(this),msg.sender,auction.auctionedTokenIdOrAmount);
         }else{

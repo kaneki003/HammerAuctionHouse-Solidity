@@ -3,6 +3,7 @@ pragma solidity ^0.8.28;
 
 import "./abstract/Auction.sol";
 import "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 contract AllPayAuction is Auction{
@@ -69,13 +70,14 @@ contract AllPayAuction is Auction{
         require(minBidDelta>=0,"Minimum bid delta cannot be negative");
         require(startingBid>=0,"Starting bid cannot be negative");
         require(duration>0,"Duration must be greater than zero seconds");
+        require(biddingToken!=address(0),"Bidding token address must be provided");
 
         if(auctionType == AuctionType.NFT){
             require(IERC721(auctionedToken).ownerOf(auctionedTokenIdOrAmount)==msg.sender,"Caller must be the owner");
-            IERC721(auctionedToken).safeTransferFrom(msg.sender,address(this),auctionedTokenIdOrAmount);
+            IERC721(auctionedToken).transferFrom(msg.sender,address(this),auctionedTokenIdOrAmount);
         }else{
             require(IERC20(auctionedToken).balanceOf(msg.sender)>=auctionedTokenIdOrAmount,"Insufficient balance");
-            IERC20(auctionedToken).transferFrom(msg.sender,address(this),auctionedTokenIdOrAmount);
+            SafeERC20.safeTransferFrom(IERC20(auctionedToken), msg.sender, address(this), auctionedTokenIdOrAmount);
         }
 
         uint256 deadline=block.timestamp+duration;
@@ -123,7 +125,7 @@ contract AllPayAuction is Auction{
         require(auction.highestBid!=0 || bidAmount>auction.startingBid,"First bid should be greater than starting bid");
         require(auction.highestBid==0 || bidAmount>=auction.highestBid+auction.minBidDelta,"Bid amount should exceed current bid by atleast minBidDelta");
         
-        IERC20(auction.biddingToken).transferFrom(msg.sender,address(this),bidAmount);
+        SafeERC20.safeTransferFrom(IERC20(auction.biddingToken),msg.sender,address(this),bidAmount);
         auction.highestBid=bidAmount;
         auction.winner=msg.sender;
         auction.availableFunds+=bidAmount;
@@ -139,7 +141,7 @@ contract AllPayAuction is Auction{
         uint256 withdrawAmount=auction.availableFunds;
         require(withdrawAmount > 0,"No funds available");
 
-        IERC20(auction.biddingToken).transfer(auction.auctioneer,withdrawAmount);
+        SafeERC20.safeTransfer(IERC20(auction.biddingToken),auction.auctioneer,withdrawAmount);
         auction.availableFunds=0;
 
         emit fundsWithdrawn(
@@ -157,7 +159,7 @@ contract AllPayAuction is Auction{
         if(auction.auctionType==AuctionType.NFT){
             IERC721(auction.auctionedToken).safeTransferFrom(address(this),msg.sender,auction.auctionedTokenIdOrAmount);
         }else{
-            IERC20(auction.auctionedToken).transfer(msg.sender,auction.auctionedTokenIdOrAmount);
+            SafeERC20.safeTransfer(IERC20(auction.auctionedToken),msg.sender,auction.auctionedTokenIdOrAmount);
         }
         auction.isClaimed=true;
 
